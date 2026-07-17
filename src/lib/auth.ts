@@ -1,13 +1,11 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
-import GitHub from "next-auth/providers/github";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "./db";
 
-// Providers added conditionally — one without env vars is skipped so deploys
-// missing GitHub creds still boot. allowDangerousEmailAccountLinking lets a
-// user who signed in with Google later sign in with GitHub and land on the
-// same User row (safe: both verify emails themselves).
+// Google-only sign-in across all Globalion skills — gives us one throttle
+// point for who can create accounts. Adding more providers later widens the
+// abuse surface without gaining much (most users have a Google account).
 
 const providers: NextAuthConfig["providers"] = [];
 
@@ -16,16 +14,6 @@ if (process.env.GOOGLE_CLIENT_ID) {
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      allowDangerousEmailAccountLinking: true,
-    }),
-  );
-}
-
-if (process.env.GITHUB_CLIENT_ID) {
-  providers.push(
-    GitHub({
-      clientId: process.env.GITHUB_CLIENT_ID,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
       allowDangerousEmailAccountLinking: true,
     }),
   );

@@ -16,6 +16,10 @@ import {
   type ToolName,
 } from "@/lib/mcp/tools";
 import { createDocumentRow, runIngest, purgeDocumentFiles } from "@/lib/docs/ingest";
+import { checkRate } from "@/lib/rate-limit";
+
+const MCP_UPLOAD_LIMIT_PER_HOUR = 60;
+const HOUR_MS = 60 * 60 * 1000;
 import { search } from "@/lib/docs/retrieve";
 import { ALLOWED_MIME_TYPES, extForMime } from "@/lib/docs/convert";
 
@@ -71,6 +75,20 @@ export async function POST(req: Request) {
           -32602,
           "Invalid arguments: " + JSON.stringify(parsed.error.flatten()),
         );
+      }
+
+      // Rate-limit the one expensive/state-changing tool. Reads are unbounded.
+      if (name === "docs_upload") {
+        const gate = checkRate("mcp_upload", key.keyPrefix, MCP_UPLOAD_LIMIT_PER_HOUR, HOUR_MS);
+        if (!gate.allowed) {
+          return jsonRpcOk(rpc.id, {
+            isError: true,
+            content: [{
+              type: "text",
+              text: `rate_limited: ${MCP_UPLOAD_LIMIT_PER_HOUR} uploads/hour per key. Retry in ${gate.retryAfterSec}s.`,
+            }],
+          });
+        }
       }
 
       try {

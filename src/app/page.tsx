@@ -140,6 +140,62 @@ export default async function LandingPage() {
 
       <section className="mb-12">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          Limits (per API key)
+        </h2>
+        <div className="grid grid-cols-1 gap-2 text-sm text-neutral-400 sm:grid-cols-2">
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+            <div className="text-xs uppercase text-neutral-500">Free tier</div>
+            <div className="mt-1 text-neutral-200">100 pages on sign-up</div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+            <div className="text-xs uppercase text-neutral-500">Upload rate</div>
+            <div className="mt-1 text-neutral-200">60 uploads / hour</div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+            <div className="text-xs uppercase text-neutral-500">Max file size</div>
+            <div className="mt-1 text-neutral-200">50 MB via dashboard · ~7 MB via <code className="rounded bg-black/40 px-1 text-indigo-300">docs_upload</code></div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+            <div className="text-xs uppercase text-neutral-500">Search</div>
+            <div className="mt-1 text-neutral-200">Unlimited · queries are free</div>
+          </div>
+        </div>
+      </section>
+
+      <section className="mb-12">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          For aggregator platforms
+        </h2>
+        <p className="text-sm text-neutral-400">
+          Building an AI-agent platform? You can offer docs-mcp to your users
+          without each of them signing up here. Register as a Platform, top
+          up a shared credit pool via Stripe, and provision sub-accounts on
+          behalf of your users — each with their own isolated tenant (docs
+          stay private per user) but funded from your pool.
+        </p>
+        <pre className="mt-3 overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 p-4 text-xs leading-relaxed text-neutral-200">
+{`# Provision a sub-account for one of your users
+curl -X POST https://docs.regiq.in/api/platform/provision-user \\
+  -H "X-Platform-Secret: <your platform secret>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"platformRef":"user@example.com"}'
+# → { userId, apiKey, freeTierCredits: 100, isNew: true }
+
+# Grant more credits from your pool
+curl -X POST https://docs.regiq.in/api/platform/grant-credits \\
+  -H "X-Platform-Secret: <your platform secret>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"userId":"<from provision>","amount":500}'`}
+        </pre>
+        <p className="mt-3 text-xs text-neutral-500">
+          Get your platform secret by emailing shreyas.pavuluri@gmail.com.
+          Paperloft (paperloft.uk) is already wired this way — enable the docs
+          skill inside paperloft and everything just works.
+        </p>
+      </section>
+
+      <section className="mb-12">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
           MCP tools
         </h2>
         <ul className="space-y-1 text-sm text-neutral-400">

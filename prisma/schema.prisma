@@ -21,7 +21,36 @@ datasource db {
   extensions = [vector]
 }
 
-// --- NextAuth models ---
+// --- Platform aggregators (paperloft, cursor-marketplace, etc.) ---
+//
+// A Platform is any aggregator that provisions sub-accounts on this skill
+// via /api/platform/provision-user. The shared secret proves the caller is
+// the platform. Each platform has a credit pool it tops up via Stripe and
+// can grant from to any user it provisioned (via /api/platform/grant-credits).
+//
+// Direct users (external, from docs.regiq.in itself) have platformId=NULL
+// and pay their own way.
+
+model Platform {
+  id                String   @id @default(cuid())
+  name              String   @unique
+  sharedSecretHash  String   @unique  // sha256 of the raw secret
+  createdAt         DateTime @default(now())
+
+  pool              PlatformPool?
+  users             User[]
+}
+
+model PlatformPool {
+  platformId  String   @id
+  balance     Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  platform    Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+}
+
+// --- NextAuth + platform-provisioned users ---
 
 model User {
   id            String    @id @default(cuid())
@@ -35,11 +64,22 @@ model User {
   // top up via /dashboard → Stripe Checkout. 1 credit = 1 page ingested.
   creditBalance Int       @default(100)
 
+  // Platform provisioning: NULL for direct sign-ups on docs.regiq.in.
+  // Non-null for users provisioned by an aggregator (e.g. paperloft).
+  // `platformRef` is the aggregator's identifier for this user (typically
+  // their email on the aggregator). Uniqueness prevents duplicate
+  // provisioning of the same aggregator user.
+  platformId    String?
+  platformRef   String?
+  platform      Platform? @relation(fields: [platformId], references: [id], onDelete: SetNull)
+
   accounts     Account[]
   sessions     Session[]
   apiKeys      ApiKey[]
   documents    Document[]
   transactions CreditTransaction[]
+
+  @@unique([platformId, platformRef])
 }
 
 model Account {
