@@ -72,7 +72,7 @@ export default async function LandingPage() {
           1 credit = 1 page ingested (vision extract + embed). <strong className="text-neutral-200">Queries are free.</strong>{" "}
           New accounts get <strong className="text-indigo-300">100 pages free</strong> to try it out.
         </p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {CREDIT_PACKS.map((p) => (
             <div key={p.id} className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
               <div className="flex items-baseline justify-between">
@@ -87,10 +87,11 @@ export default async function LandingPage() {
           ))}
         </div>
         <p className="mt-4 text-xs text-neutral-500">
-          Per-page cost breakdown: ~$0.0005 vision + ~$0.00003 embedding via
-          OpenRouter (Gemini 2.5 Flash Lite + text-embedding-3-small). We add
-          headroom + Stripe fees, priced at zero margin. The $5 minimum exists
-          because Stripe&apos;s flat $0.30 fee eats 18% of a $2 charge.
+          Or pick any page count on the dashboard — Custom pricing scales linearly.
+          Per-page cost: ~$0.0005 vision + ~$0.00003 embedding via OpenRouter
+          (Gemini 2.5 Flash Lite + text-embedding-3-small). Priced at zero margin;
+          $1 is the smallest pack because Stripe&apos;s flat $0.30 fee makes anything
+          less absurd (a $0.50 charge would lose 60% to Stripe).
         </p>
       </section>
 

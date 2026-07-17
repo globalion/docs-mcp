@@ -120,42 +120,97 @@ export async function grant(
 }
 
 /**
- * Credit packs — priced at exact break-even after Stripe fees.
- * The starter pack advertises "570 documents" assuming ~10 pages/doc.
+ * Break-even pricing formula (see the pack definitions below).
+ *
+ * We want, for X pages purchased:
+ *   net_from_stripe >= X * $0.0008
+ * Stripe takes: 2.9% + $0.30 flat, so
+ *   net = gross * 0.971 - 0.30
+ * Solve:
+ *   gross >= (X * 0.0008 + 0.30) / 0.971
+ * That's the exact break-even; we ceil to the nearest cent for Stripe.
+ *
+ * The flat $0.30 is why $2 top-ups are absurd (18% goes to Stripe). $1 barely
+ * survives — the smallest pack we offer is $1 = 800 pages.
  */
-export const CREDIT_PACKS = [
+export const CUSTOM_MIN_PAGES = 100;
+export const CUSTOM_MAX_PAGES = 500_000;
+
+export interface Pack {
+  id: string;
+  priceUsd: number;
+  credits: number;
+  unitAmountCents: number; // what we actually pass to Stripe
+  label: string;
+  subLabel: string;
+}
+
+export const CREDIT_PACKS: Pack[] = [
+  {
+    id: "pack_micro",
+    priceUsd: 1,
+    credits: 800,
+    unitAmountCents: 100,
+    label: "Micro",
+    subLabel: "~80 docs @ 10 pg",
+  },
   {
     id: "pack_starter",
     priceUsd: 5,
     credits: 5700,
+    unitAmountCents: 500,
     label: "Starter",
-    subLabel: "~570 docs @ 10 pg avg",
+    subLabel: "~570 docs @ 10 pg",
   },
   {
     id: "pack_regular",
     priceUsd: 10,
     credits: 11700,
+    unitAmountCents: 1000,
     label: "Regular",
-    subLabel: "~1,170 docs @ 10 pg avg",
+    subLabel: "~1,170 docs @ 10 pg",
   },
   {
     id: "pack_bulk",
     priceUsd: 20,
     credits: 23900,
+    unitAmountCents: 2000,
     label: "Bulk",
-    subLabel: "~2,390 docs @ 10 pg avg",
+    subLabel: "~2,390 docs @ 10 pg",
   },
   {
     id: "pack_pro",
     priceUsd: 50,
-    credits: 60500,
+    credits: 60000,
+    unitAmountCents: 5000,
     label: "Pro",
-    subLabel: "~6,050 docs @ 10 pg avg",
+    subLabel: "~6,000 docs @ 10 pg",
   },
-] as const;
-
-export type CreditPackId = (typeof CREDIT_PACKS)[number]["id"];
+];
 
 export function findPack(id: string) {
   return CREDIT_PACKS.find((p) => p.id === id);
+}
+
+/**
+ * Build a one-off pack for a user-chosen page count. Price is the smallest
+ * whole-cent gross that covers the underlying cost after Stripe fees.
+ * Enforces min/max so we don't accept absurd inputs.
+ */
+export function computeCustomPack(pages: number): Pack {
+  if (!Number.isInteger(pages) || pages < CUSTOM_MIN_PAGES || pages > CUSTOM_MAX_PAGES) {
+    throw new Error(
+      `custom pages must be an integer between ${CUSTOM_MIN_PAGES} and ${CUSTOM_MAX_PAGES}`,
+    );
+  }
+  const rawCents = (pages * 0.0008 + 0.30) / 0.971 * 100;
+  const cents = Math.max(100, Math.ceil(rawCents));
+  return {
+    id: `custom_${pages}`,
+    priceUsd: cents / 100,
+    credits: pages,
+    unitAmountCents: cents,
+    label: "Custom",
+    subLabel: `${pages.toLocaleString()} pages`,
+  };
 }

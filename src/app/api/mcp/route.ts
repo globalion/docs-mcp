@@ -15,7 +15,7 @@ import {
   assertBase64Size,
   type ToolName,
 } from "@/lib/mcp/tools";
-import { createDocumentRow, runIngest } from "@/lib/docs/ingest";
+import { createDocumentRow, runIngest, purgeDocumentFiles } from "@/lib/docs/ingest";
 import { search } from "@/lib/docs/retrieve";
 import { ALLOWED_MIME_TYPES, extForMime } from "@/lib/docs/convert";
 
@@ -203,10 +203,10 @@ async function handleSearch(
 async function handleDelete(userId: string, id: string) {
   const doc = await prisma.document.findFirst({ where: { id, userId } });
   if (!doc) throw new Error(`document ${id} not found`);
-  // Cascade deletes chunks (schema onDelete: Cascade). Raw file on /data/docs
-  // gets orphaned — a periodic sweeper could reap those, but for now it's
-  // a small cost tradeoff vs. the risk of accidental unlink.
+  // Cascade deletes chunks (schema onDelete: Cascade). Then wipe the raw
+  // files on disk so /data doesn't grow unbounded.
   await prisma.document.delete({ where: { id: doc.id } });
+  await purgeDocumentFiles(userId, doc.id);
   return { id: doc.id, deleted: true };
 }
 

@@ -1,12 +1,15 @@
-// POST /api/credits/checkout { packId } → { url } for Stripe Checkout redirect.
+// POST /api/credits/checkout
+//   { packId: "pack_micro" }              → fixed pack
+//   { customPages: 1234 }                 → dynamically-priced pack
+// → { url } for Stripe Checkout redirect.
 //
-// Returns 503 with a friendly hint when STRIPE_SECRET_KEY isn't set yet —
-// the dashboard shows "billing coming soon" instead of crashing.
+// Returns 503 when STRIPE_SECRET_KEY is unset (dashboard shows the pricing UI
+// but the redirect fails cleanly rather than crashing).
 
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getStripe, isStripeConfigured } from "@/lib/stripe";
-import { findPack } from "@/lib/credits";
+import { findPack, computeCustomPack, type Pack } from "@/lib/credits";
 
 export const runtime = "nodejs";
 
@@ -16,8 +19,22 @@ export async function POST(req: Request) {
   const userEmail = session?.user?.email;
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const body = (await req.json().catch(() => ({}))) as { packId?: string };
-  const pack = body.packId ? findPack(body.packId) : null;
+  const body = (await req.json().catch(() => ({}))) as {
+    packId?: string;
+    customPages?: number;
+  };
+
+  let pack: Pack | null = null;
+  if (body.packId) {
+    const found = findPack(body.packId);
+    if (found) pack = found;
+  } else if (body.customPages != null) {
+    try {
+      pack = computeCustomPack(Number(body.customPages));
+    } catch (err) {
+      return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+    }
+  }
   if (!pack) return NextResponse.json({ error: "unknown pack" }, { status: 400 });
 
   if (!isStripeConfigured()) {
@@ -43,15 +60,14 @@ export async function POST(req: Request) {
         quantity: 1,
         price_data: {
           currency: "usd",
-          unit_amount: pack.priceUsd * 100,
+          unit_amount: pack.unitAmountCents,
           product_data: {
             name: `${pack.credits.toLocaleString()} docs-mcp credits`,
-            description: `${pack.label} pack — ${pack.subLabel}. 1 credit = 1 page ingested.`,
+            description: `${pack.label} — ${pack.subLabel}. 1 credit = 1 page ingested.`,
           },
         },
       },
     ],
-    // Stashed on the session so the webhook doesn't need a DB lookup.
     metadata: {
       userId,
       packId: pack.id,

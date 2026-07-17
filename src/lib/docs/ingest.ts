@@ -1,21 +1,29 @@
 // Ingest pipeline: raw upload → vector chunks in Postgres.
 //
-//   1. Write raw bytes to /data/docs/<userId>/<docId>/original.<ext>
-//   2. Convert to per-page PNGs (LibreOffice + pdftoppm)
-//   3. Deduct credits = pageCount (compare-and-swap, refund on failure)
-//   4. For each page (concurrency-bounded): vision extract → chunk → embed
-//   5. Insert chunks with vector column via $queryRawUnsafe (Prisma can't
-//      express `vector(1536)` in its type-safe API)
-//   6. Mark document ready
+// Split into two phases so the user sees the cost BEFORE credits get debited:
 //
-// Runs as fire-and-forget from /api/upload. Status updates on the Document
-// row let the dashboard + docs_get show progress; failures set status='failed'
-// with errorMsg and refund the deducted credits.
+//   Phase 1 (runIngest):
+//     • Write bytes → convert (LibreOffice + pdftoppm) → count pages
+//     • Check balance vs cost
+//     • If balance covers it → deduct, then Phase 2
+//     • If NOT → set status="needs_credits" with a clear "top up N pages"
+//       message. No vision runs, no credits debited. User can top up then
+//       hit POST /api/docs/:id/retry to resume from this point.
+//
+//   Phase 2 (runVisionAndEmbed):
+//     • Vision extract every page (4 concurrent)
+//     • Chunk + embed
+//     • Insert chunks with vector column
+//     • Set status="ready"
+//     • On any failure, refund the credits we debited and status="failed"
+//
+// LibreOffice conversion is cached on disk — retry after top-up doesn't
+// re-convert, it just re-reads the page-*.png files that already exist.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, unlink, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "../db";
-import { tryDeduct, refund, quoteCredits } from "../credits";
+import { tryDeduct, refund, quoteCredits, readBalance } from "../credits";
 import { isAdminUser } from "../admin";
 import { documentToPagePngs, extForMime } from "./convert";
 import { extractPageFromImage } from "./vision";
@@ -51,7 +59,7 @@ export async function createDocumentRow(args: CreateArgs) {
       mimeType: args.mimeType,
       sha256: args.sha256Hex,
       bytes: args.bytes.length,
-      storagePath: "", // filled in below
+      storagePath: "",
       status: "pending",
     },
   });
@@ -69,54 +77,132 @@ export async function createDocumentRow(args: CreateArgs) {
 }
 
 /**
- * Runs the full ingest for a Document that's in state 'pending'. Marks
- * 'processing' → 'ready' | 'failed'. Deducts credits ONCE we know pageCount;
- * refunds on failure.
+ * Return page PNG paths, reusing what's on disk if a prior run already
+ * converted the doc. Retry-after-topup path relies on this — we don't want
+ * to burn LibreOffice CPU twice.
+ */
+async function ensurePagesConverted(storagePath: string, mimeType: string): Promise<string[]> {
+  const dir = path.dirname(storagePath);
+  const existing = await readdir(dir).catch(() => [] as string[]);
+  const cached = existing
+    .filter((f) => /^page-\d+\.png$/.test(f))
+    .map((f) => ({ name: f, num: parseInt(f.match(/^page-(\d+)\.png$/)![1], 10) }))
+    .sort((a, b) => a.num - b.num)
+    .map((f) => path.join(dir, f.name));
+  if (cached.length > 0) return cached;
+  const { pagePaths } = await documentToPagePngs(storagePath, mimeType);
+  return pagePaths;
+}
+
+/**
+ * Phase 1 orchestrator. Called fire-and-forget from /api/upload and from the
+ * MCP docs_upload tool. Idempotent on retry — safe to invoke again after a
+ * `needs_credits` result once the user has topped up.
  */
 export async function runIngest(docId: string): Promise<void> {
   const doc = await prisma.document.findUnique({ where: { id: docId } });
   if (!doc) throw new Error(`document ${docId} not found`);
-  if (doc.status !== "pending") return; // idempotent
+  if (doc.status === "ready" || doc.status === "processing") return;
 
   await prisma.document.update({
     where: { id: docId },
     data: { status: "processing", errorMsg: null },
   });
 
-  let creditsCharged = 0;
   try {
-    // Convert to per-page images (any office format → pdf → pngs).
-    const { pagePaths } = await documentToPagePngs(doc.storagePath, doc.mimeType);
+    // Convert (or re-use cached pages from a prior attempt).
+    const pagePaths = await ensurePagesConverted(doc.storagePath, doc.mimeType);
     const pageCount = pagePaths.length;
+    await prisma.document.update({
+      where: { id: docId },
+      data: { pageCount },
+    });
 
-    // Deduct credits — one per page. Admins bypass the balance check but
-    // still get a ledger entry for auditability.
+    // Cost check. Admins bypass.
     const admin = await isAdminUser(doc.userId);
     const cost = quoteCredits(pageCount).totalCredits;
+    let creditsCharged = 0;
+
     if (!admin) {
+      const balance = await readBalance(doc.userId);
+      if (balance < cost) {
+        // Hold here. No vision, no debit. User can top up + retry.
+        await prisma.document.update({
+          where: { id: docId },
+          data: {
+            status: "needs_credits",
+            errorMsg: `This document is ${pageCount} pages and needs ${cost} credits. You have ${balance}. Top up + click Retry.`,
+          },
+        });
+        return;
+      }
       const newBal = await tryDeduct(doc.userId, cost, "ingest", docId);
       if (newBal === null) {
-        throw new Error(`insufficient credits: need ${cost}, top up at /dashboard`);
+        // Race: another concurrent operation drained credits between our
+        // check and this deduction. Treat as needs_credits.
+        await prisma.document.update({
+          where: { id: docId },
+          data: {
+            status: "needs_credits",
+            errorMsg: `Balance dropped mid-processing. Top up + click Retry.`,
+          },
+        });
+        return;
       }
       creditsCharged = cost;
     } else {
       await prisma.creditTransaction.create({
-        data: { userId: doc.userId, delta: 0, reason: "admin_grant", docId, metadata: { pages: pageCount } },
+        data: {
+          userId: doc.userId,
+          delta: 0,
+          reason: "admin_grant",
+          docId,
+          metadata: { pages: pageCount },
+        },
       });
     }
 
-    // Vision extract every page, bounded concurrency.
+    // Phase 2 — expensive.
+    await runVisionAndEmbed(docId, pagePaths, creditsCharged);
+  } catch (err) {
+    // Only fires for pre-vision errors (LibreOffice, poppler). Post-vision
+    // failures are handled inside runVisionAndEmbed which refunds itself.
+    await prisma.document.update({
+      where: { id: docId },
+      data: {
+        status: "failed",
+        errorMsg: (err as Error).message.slice(0, 500),
+      },
+    });
+    throw err;
+  }
+}
+
+/**
+ * Phase 2. Runs vision extraction, chunking, and embedding. On failure,
+ * refunds `creditsCharged`. `pagePaths` comes from Phase 1.
+ */
+async function runVisionAndEmbed(
+  docId: string,
+  pagePaths: string[],
+  creditsCharged: number,
+): Promise<void> {
+  const doc = await prisma.document.findUnique({ where: { id: docId } });
+  if (!doc) throw new Error(`document ${docId} vanished mid-ingest`);
+
+  try {
+    const pageCount = pagePaths.length;
     const pageTexts: string[] = new Array(pageCount).fill("");
     for (let i = 0; i < pageCount; i += VISION_CONCURRENCY) {
       const batch = pagePaths.slice(i, i + VISION_CONCURRENCY);
       const results = await Promise.all(
-        batch.map((p, idxInBatch) => extractPageFromImage(p).then((r) => ({ idx: i + idxInBatch, r }))),
+        batch.map((p, idxInBatch) =>
+          extractPageFromImage(p).then((r) => ({ idx: i + idxInBatch, r })),
+        ),
       );
       for (const { idx, r } of results) pageTexts[idx] = r.text;
     }
 
-    // Chunk each page's text; keep (chunk, pageNumber) pairs so citations
-    // resolve to the exact page later.
     interface ChunkWithMeta {
       pageNumber: number;
       chunkIndex: number;
@@ -138,20 +224,20 @@ export async function runIngest(docId: string): Promise<void> {
     }
 
     if (chunks.length === 0) {
-      // A doc with no extractable text still counts as processed — just no
-      // retrievable chunks. Common for entirely-blank scans.
+      // Blank doc — no chunks to embed. Still counts as ready.
       await prisma.document.update({
         where: { id: docId },
-        data: { status: "ready", pageCount, creditsSpent: creditsCharged },
+        data: { status: "ready", creditsSpent: creditsCharged },
       });
       return;
     }
 
-    // Embed everything in batches (embedBatch handles internal batching).
     const vectors = await embedBatch(chunks.map((c) => c.content));
 
-    // Insert with raw SQL because Prisma has no type for vector(1536).
-    // Batch INSERT to avoid one round-trip per chunk.
+    // Delete any leftover chunks from a prior partial attempt before inserting
+    // fresh ones (retry safety). Cheap when the count is 0.
+    await prisma.documentChunk.deleteMany({ where: { documentId: docId } });
+
     const INSERT_BATCH = 32;
     for (let i = 0; i < chunks.length; i += INSERT_BATCH) {
       const slice = chunks.slice(i, i + INSERT_BATCH);
@@ -159,7 +245,6 @@ export async function runIngest(docId: string): Promise<void> {
       const rows = slice
         .map((c, j) => {
           const v = `[${vecSlice[j].join(",")}]`;
-          // Escape content: replace ' with '' for Postgres string literal.
           const safeContent = c.content.replace(/'/g, "''");
           return `('c${docId.slice(-8)}${c.chunkIndex}', '${docId}', ${c.chunkIndex}, ${c.pageNumber}, '${safeContent}', ${c.tokenCount}, '${v}'::vector, now())`;
         })
@@ -171,14 +256,9 @@ export async function runIngest(docId: string): Promise<void> {
 
     await prisma.document.update({
       where: { id: docId },
-      data: {
-        status: "ready",
-        pageCount,
-        creditsSpent: creditsCharged,
-      },
+      data: { status: "ready", creditsSpent: creditsCharged },
     });
   } catch (err) {
-    // Refund what we charged before we blew up.
     if (creditsCharged > 0) {
       await refund(doc.userId, creditsCharged, docId);
     }
@@ -190,5 +270,23 @@ export async function runIngest(docId: string): Promise<void> {
       },
     });
     throw err;
+  }
+}
+
+/**
+ * Delete raw files on disk when a document is removed. Called from the API
+ * layer AFTER the Prisma delete succeeds. Best-effort — failures logged, not
+ * rethrown (the row is already gone, cleanup is nice-to-have).
+ */
+export async function purgeDocumentFiles(userId: string, docId: string): Promise<void> {
+  const dir = path.join(DATA_ROOT, userId, docId);
+  try {
+    const files = await readdir(dir).catch(() => [] as string[]);
+    for (const f of files) {
+      await unlink(path.join(dir, f)).catch(() => undefined);
+    }
+    await rmdir(dir).catch(() => undefined);
+  } catch (err) {
+    console.error(`[ingest] purge files for ${docId} failed:`, err);
   }
 }
