@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { auth, enabledProviders } from "@/lib/auth";
 import { SignInButtons } from "./signin-button";
+import { PricingTile } from "./pricing-tile";
 import { CREDIT_PACKS } from "@/lib/credits";
 
 const CONFIG_SNIPPET = `{
@@ -32,7 +33,9 @@ export default async function LandingPage() {
           lost in plain-text stripping. Every returned chunk carries its page
           number, so answers link straight to the source.
         </p>
-        <div className="mt-8">
+
+        {/* Primary CTA — always visible so the flow is obvious */}
+        <div className="mt-8 max-w-md">
           {signedIn ? (
             <div className="flex gap-3">
               <Link
@@ -42,27 +45,54 @@ export default async function LandingPage() {
                 Open dashboard →
               </Link>
               <Link
-                href="https://github.com/globalion/docs-mcp"
-                target="_blank"
+                href="/dashboard#api-key"
                 className="rounded-lg border border-neutral-700 bg-neutral-900 px-5 py-2.5 text-sm text-neutral-200 hover:bg-neutral-800"
               >
-                GitHub ↗
+                Get API key
               </Link>
             </div>
           ) : (
-            <div className="max-w-sm">
+            <>
               <SignInButtons providers={enabledProviders} />
-              <Link
-                href="https://github.com/globalion/docs-mcp"
-                target="_blank"
-                className="mt-2 block text-center text-xs text-neutral-500 underline hover:text-neutral-300"
-              >
-                View on GitHub ↗
-              </Link>
-            </div>
+              <p className="mt-2 text-xs text-neutral-500">
+                Sign in with Google → 100 pages free → grab your API key on the dashboard.
+                Or pick a pack below to sign in + top up in one flow.
+              </p>
+            </>
           )}
         </div>
       </div>
+
+      <section className="mb-12">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          How it works — three steps
+        </h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+            <div className="text-2xl font-bold text-indigo-300">1.</div>
+            <div className="mt-1 text-sm font-semibold text-neutral-100">Sign in with Google</div>
+            <div className="mt-1 text-xs text-neutral-500">
+              Free — 100 pages on the house so you can try it out.
+            </div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+            <div className="text-2xl font-bold text-indigo-300">2.</div>
+            <div className="mt-1 text-sm font-semibold text-neutral-100">Grab your API key</div>
+            <div className="mt-1 text-xs text-neutral-500">
+              Copy from the dashboard. Paste into Claude Desktop, Cursor, Paperloft,
+              or any MCP-speaking client.
+            </div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+            <div className="text-2xl font-bold text-indigo-300">3.</div>
+            <div className="mt-1 text-sm font-semibold text-neutral-100">Top up when you need to</div>
+            <div className="mt-1 text-xs text-neutral-500">
+              Pick a pack below (or a custom amount). Break-even pricing — Stripe
+              Checkout, one click, we make $0.
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="mb-12">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
@@ -71,19 +101,19 @@ export default async function LandingPage() {
         <p className="mb-4 text-sm text-neutral-400">
           1 credit = 1 page ingested (vision extract + embed). <strong className="text-neutral-200">Queries are free.</strong>{" "}
           New accounts get <strong className="text-indigo-300">100 pages free</strong> to try it out.
+          Click any pack to buy — you&apos;ll sign in with Google first if you haven&apos;t already.
         </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {CREDIT_PACKS.map((p) => (
-            <div key={p.id} className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <div className="flex items-baseline justify-between">
-                <div className="text-sm font-semibold text-neutral-200">{p.label}</div>
-                <div className="text-2xl font-bold text-indigo-300">${p.priceUsd}</div>
-              </div>
-              <div className="mt-2 text-xs text-neutral-500">
-                {p.credits.toLocaleString()} pages
-              </div>
-              <div className="mt-1 text-xs text-neutral-600">{p.subLabel}</div>
-            </div>
+            <PricingTile
+              key={p.id}
+              id={p.id}
+              priceUsd={p.priceUsd}
+              label={p.label}
+              subLabel={p.subLabel}
+              credits={p.credits}
+              isSignedIn={signedIn}
+            />
           ))}
         </div>
         <p className="mt-4 text-xs text-neutral-500">
@@ -97,39 +127,10 @@ export default async function LandingPage() {
 
       <section className="mb-12">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
-          How it works
-        </h2>
-        <pre className="overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 p-4 text-xs leading-relaxed text-neutral-300">
-{`Upload doc  →  render each page as image
-                       │
-                       ▼
-       Gemini 2.5 Flash Lite reads the page
-       (text · tables · figures · handwriting)
-                       │
-                       ▼
-       Chunk (500 tokens, 50 overlap) + embed
-       (text-embedding-3-small, 1536 dims)
-                       │
-                       ▼
-       Store in pgvector · metadata:
-       docId · filename · pageNumber · sha256
-                       │
-                       ▼
-     docs_search(query, k=8)  →  top chunks
-     with { page, similarity, deep link }
-                       │
-                       ▼
-       Your agent synthesizes the answer.
-       (We don't — you bring the LLM.)`}
-        </pre>
-      </section>
-
-      <section className="mb-12">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
           Setup for any MCP client
         </h2>
         <ol className="space-y-2 text-neutral-300">
-          <li>1. Sign in above.</li>
+          <li>1. Sign in above (Google).</li>
           <li>2. Copy your MCP API key from /dashboard.</li>
           <li>3. Paste this into your agent&apos;s config:</li>
         </ol>

@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { CREDIT_PACKS, CUSTOM_MIN_PAGES, CUSTOM_MAX_PAGES } from "@/lib/credits";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { CREDIT_PACKS, CUSTOM_MIN_PAGES, CUSTOM_MAX_PAGES, findPack } from "@/lib/credits";
 
 // Client mirror of computeCustomPack — same formula, no server round-trip so
 // the user sees a live price as they type. The actual charge goes through
@@ -13,10 +13,27 @@ function customPriceCents(pages: number): number {
   return Math.max(100, Math.ceil(raw));
 }
 
-export function PricingPanel({ balance }: { balance: number }) {
+export function PricingPanel({ balance, autoBuyPackId }: { balance: number; autoBuyPackId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [customPages, setCustomPages] = useState<string>("");
+  const autoTriggered = useRef(false);
+
+  // Auto-open Stripe Checkout if the URL says ?buy=<packId> (from clicking a
+  // pricing tile on the landing page). Fires once per mount so a purchase
+  // return like /dashboard?purchase=success doesn't loop back into checkout.
+  useEffect(() => {
+    if (autoTriggered.current) return;
+    if (!autoBuyPackId) return;
+    if (!findPack(autoBuyPackId)) return;
+    autoTriggered.current = true;
+    // Strip ?buy from the URL first so a refresh doesn't re-trigger.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("buy");
+    window.history.replaceState(null, "", url.toString());
+    buyPack(autoBuyPackId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoBuyPackId]);
 
   const parsed = customPages ? Number(customPages) : NaN;
   const customValid =

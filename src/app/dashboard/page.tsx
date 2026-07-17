@@ -20,6 +20,7 @@ export default async function Dashboard({
   const sp = await searchParams;
   const rawKey = typeof sp.freshKey === "string" ? sp.freshKey : null;
   const purchase = typeof sp.purchase === "string" ? sp.purchase : null;
+  const autoBuyPackId = typeof sp.buy === "string" ? sp.buy : undefined;
 
   const [prefix, balance, docs] = await Promise.all([
     getCurrentKeyPrefix(session.user.id),
@@ -77,7 +78,7 @@ export default async function Dashboard({
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
           1. Credits
         </h2>
-        <PricingPanel balance={balance} />
+        <PricingPanel balance={balance} autoBuyPackId={autoBuyPackId} />
       </section>
 
       <section className="mb-6">
@@ -155,7 +156,7 @@ export default async function Dashboard({
         )}
       </section>
 
-      <section className="mb-6">
+      <section id="api-key" className="mb-6 scroll-mt-8">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
           4. MCP API key
         </h2>
