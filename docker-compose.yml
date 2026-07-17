@@ -1,0 +1,47 @@
+# docs-mcp deployment stack.
+#
+# Uses pgvector/pgvector:pg16 instead of vanilla postgres:16 — Prisma's
+# `Unsupported("vector(1536)")` column needs the `vector` extension enabled
+# in the database. `CREATE EXTENSION IF NOT EXISTS vector` runs on boot
+# (see src/instrumentation.ts).
+#
+# Host port 3017 is the debugging fallback; external traffic reaches this
+# via the Cloudflare tunnel to `docs.regiq.in` → `docs-mcp-web:3000`.
+
+services:
+  db:
+    container_name: docs-mcp-db
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: docs_mcp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d docs_mcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    container_name: docs-mcp-web
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://admin:admin@db:5432/docs_mcp
+    volumes:
+      - docs-data:/data
+    ports:
+      - "3017:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  docs-data:

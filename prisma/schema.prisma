@@ -1,0 +1,163 @@
+// docs-mcp Prisma schema.
+//
+// Uses the `vector` Postgres extension (pgvector) via
+// `previewFeatures = ["postgresqlExtensions"]` — Prisma 6.19.2 supports
+// declaring extensions in the datasource block. Vector columns themselves
+// are `Unsupported("vector(1536)")` — Prisma can create/migrate them but
+// can't query them via its type-safe API; we use `$queryRaw` for retrieval.
+//
+// The db image is pgvector/pgvector:pg16 so the extension is already
+// present; instrumentation.ts runs `CREATE EXTENSION IF NOT EXISTS vector`
+// on boot to guarantee it's enabled before Prisma introspects.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// --- NextAuth models ---
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+
+  // Prepaid credits. New users get 100 free pages (trial); after that they
+  // top up via /dashboard → Stripe Checkout. 1 credit = 1 page ingested.
+  creditBalance Int       @default(100)
+
+  accounts     Account[]
+  sessions     Session[]
+  apiKeys      ApiKey[]
+  documents    Document[]
+  transactions CreditTransaction[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --- MCP API keys ---
+// Raw format: `docs_live_<48 hex>`. SHA-256 hash stored; raw shown once.
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  keyHash    String    @unique
+  keyPrefix  String
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// --- Documents ---
+//
+// One row per uploaded file. `storagePath` points at the raw file on disk
+// (/data/docs/<userId>/<docId>/original.<ext>). Duplicate uploads (same
+// sha256 for the same user) are deduped by returning the existing row
+// instead of re-ingesting.
+
+model Document {
+  id           String    @id @default(cuid())
+  userId       String
+  filename     String
+  mimeType     String
+  sha256       String
+  pageCount    Int       @default(0)
+  bytes        Int
+  storagePath  String    // absolute path on the container's /data volume
+  status       String    @default("pending")  // pending | processing | ready | failed
+  errorMsg     String?   @db.Text
+  creditsSpent Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chunks DocumentChunk[]
+
+  @@unique([userId, sha256])
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+// One row per embedded chunk. `embedding` is the raw pgvector column —
+// queried via $queryRaw with cosine distance (`<=>` operator).
+
+model DocumentChunk {
+  id         String  @id @default(cuid())
+  documentId String
+  chunkIndex Int
+  pageNumber Int
+  content    String  @db.Text
+  tokenCount Int
+  // 1536 dims = text-embedding-3-small. If we ever move to `-large` (3072)
+  // this needs an ALTER + reindex + backfill; the app enforces the model.
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, chunkIndex])
+}
+
+// --- Credit ledger ---
+// Immutable audit log of every balance change. `delta` positive for grants
+// (trial, purchase, refund), negative for spends.
+
+model CreditTransaction {
+  id        String   @id @default(cuid())
+  userId    String
+  delta     Int
+  reason    String   // "trial" | "purchase" | "ingest" | "refund" | "admin_grant"
+  docId     String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
