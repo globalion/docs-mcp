@@ -53,16 +53,36 @@ export async function provisionUser(
   platformRef: string,
   email?: string,
 ): Promise<{ userId: string; apiKey: string | null; keyPrefix: string; isNew: boolean }> {
-  const existing = await prisma.user.findUnique({
+  // Priority 1: already provisioned for this (platform, ref)? Return it.
+  let user = await prisma.user.findUnique({
     where: { platformId_platformRef: { platformId, platformRef } },
   });
 
-  let user = existing;
   let isNew = false;
+  if (!user && email) {
+    // Priority 2: a User with this email already exists (they signed up
+    // directly first, or were provisioned by another platform under a
+    // different platformRef). Attach them to THIS platform instead of
+    // creating a duplicate — User.email is @unique globally.
+    const existingByEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingByEmail) {
+      if (existingByEmail.platformId && existingByEmail.platformId !== platformId) {
+        // Owned by a different platform — return an error rather than steal.
+        throw new Error(
+          `user ${email} is already provisioned under a different platform; cannot cross-attach`,
+        );
+      }
+      user = await prisma.user.update({
+        where: { id: existingByEmail.id },
+        data: { platformId, platformRef },
+      });
+      // Don't grant a fresh free tier — they may have already used it.
+    }
+  }
+
   if (!user) {
-    // Synthetic email if the aggregator didn't provide one — must be unique
-    // globally because the User.email column is @unique. Namespaced by
-    // platformId to prevent collisions across aggregators.
+    // Priority 3: create fresh. Synthetic email if the aggregator didn't
+    // provide one — namespaced by platformId to prevent collisions.
     const finalEmail = email ?? `${platformRef}@${platformId}.platform.local`;
     user = await prisma.user.create({
       data: {
@@ -74,7 +94,6 @@ export async function provisionUser(
     });
     isNew = true;
 
-    // Log the trial grant so the transaction ledger shows the free tier.
     await prisma.creditTransaction.create({
       data: {
         userId: user.id,
