@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.Shreyas-Profile/docs-mcp",
-  "description": "Drop any Word/Excel/PDF/PowerPoint into a vector RAG store with page citations. Break-even Stripe billing.",
+  "description": "Vector RAG store for Word/Excel/PDF/PowerPoint. Break-even pricing, $5 per 5,700 pages.",
   "status": "active",
   "repository": {
     "url": "https://github.com/globalion/docs-mcp",
