@@ -67,7 +67,6 @@ export async function provisionUser(
     const existingByEmail = await prisma.user.findUnique({ where: { email } });
     if (existingByEmail) {
       if (existingByEmail.platformId && existingByEmail.platformId !== platformId) {
-        // Owned by a different platform — return an error rather than steal.
         throw new Error(
           `user ${email} is already provisioned under a different platform; cannot cross-attach`,
         );
@@ -76,6 +75,18 @@ export async function provisionUser(
         where: { id: existingByEmail.id },
         data: { platformId, platformRef },
       });
+      // First-time platform link (was direct signup): revoke all their old
+      // keys so the aggregator can mint one it actually holds. Old keys
+      // stop working; user can regenerate on docs.regiq.in if they want a
+      // direct key back. Alternative would be to return apiKey=null and
+      // ask the user to visit the dashboard, but that's a worse UX for a
+      // toggle-and-forget flow.
+      if (!existingByEmail.platformId) {
+        await prisma.apiKey.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
       // Don't grant a fresh free tier — they may have already used it.
     }
   }
