@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.Shreyas-Profile/docs-mcp",
+  "description": "Vector RAG store for Word/Excel/PDF/PowerPoint. Break-even pricing, $5 per 5,700 pages.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/globalion/docs-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://docs.regiq.in/api/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <apiKey> — get yours at https://docs.regiq.in after Google sign-in.",
+          "is_required": true,
+          "is_secret": true
+        }
+      ]
+    }
+  ]
+}
